@@ -4,8 +4,11 @@ import numpy as np
 import os
 import torch
 import torch.nn.functional as F
+import time
 from torchvision.transforms import Compose
 from tqdm import tqdm
+from pythonosc import udp_client
+
 
 from depth_anything.dpt import DepthAnything
 from depth_anything.util.transform import Resize, NormalizeImage, PrepareForNet
@@ -62,6 +65,14 @@ if __name__ == '__main__':
         print("❌ Error: Could not open video.")
         exit()
 
+    osc_client = udp_client.SimpleUDPClient("127.0.0.1", 6448)
+
+    # test OSC communication
+    for i in range(10):
+        osc_client.send_message("/wek/inputs", [i * 0.1, 1 - i * 0.1])
+        print("Sent frame:", i)
+        time.sleep(0.5)
+
     while cap.isOpened():
         ret, raw_image = cap.read()
 
@@ -81,6 +92,11 @@ if __name__ == '__main__':
             depth = depth_anything(image)
         
         depth = F.interpolate(depth[None], (h, w), mode='bilinear', align_corners=False)[0, 0]
+        
+        # raw depth for potential further processing
+        raw_depth = depth.cpu().numpy()
+
+        # Normalize depth for visualization
         depth = (depth - depth.min()) / (depth.max() - depth.min()) * 255.0
         
         depth = depth.cpu().numpy().astype(np.uint8)
