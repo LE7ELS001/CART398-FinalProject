@@ -28,6 +28,9 @@ if __name__ == '__main__':
     font_scale = 1
     font_thickness = 2
     
+    # initialize OSC client
+    osc_client = udp_client.SimpleUDPClient("127.0.0.1", 6448)
+
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
     print("CUDA available:", torch.cuda.is_available())
     if torch.cuda.is_available():
@@ -65,13 +68,12 @@ if __name__ == '__main__':
         print("❌ Error: Could not open video.")
         exit()
 
-    osc_client = udp_client.SimpleUDPClient("127.0.0.1", 6448)
 
     # test OSC communication
-    for i in range(10):
-        osc_client.send_message("/wek/inputs", [i * 0.1, 1 - i * 0.1])
-        print("Sent frame:", i)
-        time.sleep(0.5)
+    # for i in range(10):
+    #     osc_client.send_message("/wek/inputs", [i * 0.1, 1 - i * 0.1])
+    #     print("Sent frame:", i)
+    #     time.sleep(0.5)
 
     while cap.isOpened():
         ret, raw_image = cap.read()
@@ -96,8 +98,42 @@ if __name__ == '__main__':
         # raw depth for potential further processing
         raw_depth = depth.cpu().numpy()
 
+        # test protocol osc communication 
+        if 'last_mean_depth' not in locals():
+            last_mean_depth = np.mean(raw_depth)
+        
+        h, w = raw_depth.shape
+        center = raw_depth[h//3:2*h//3, w//3:2*w//3]
+        left = raw_depth[:, :w//3]
+        right = raw_depth[:, -w//3:]
+        top = raw_depth[:h//2, :]
+        bottom = raw_depth[h//2:, :]
+
+        mean_depth = float(np.mean(raw_depth))
+        center_depth = float(np.mean(center))
+        left_depth = float(np.mean(left))
+        right_depth = float(np.mean(right))
+        top_depth = float(np.mean(top))
+        bottom_depth = float(np.mean(bottom))
+        variance = float(np.var(raw_depth))
+        min_depth = float(np.min(raw_depth))
+        max_depth = float(np.max(raw_depth))
+        delta_depth = float(abs(mean_depth - last_mean_depth))
+
+        last_mean_depth = mean_depth
+
+        depth_features = [
+        mean_depth, center_depth, left_depth, right_depth,
+        top_depth, bottom_depth, variance, min_depth, max_depth, delta_depth
+        ]
+
+        osc_client.send_message("/depth/features", depth_features)
+        # print("Sent depth features:", depth_features)
+
         # Normalize depth for visualization
         depth = (depth - depth.min()) / (depth.max() - depth.min()) * 255.0
+
+
         
         depth = depth.cpu().numpy().astype(np.uint8)
         depth_color = cv2.applyColorMap(depth, cv2.COLORMAP_INFERNO)
