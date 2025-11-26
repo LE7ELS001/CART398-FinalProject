@@ -31,14 +31,24 @@ if __name__ == '__main__':
     # initialize OSC client
     osc_client = udp_client.SimpleUDPClient("127.0.0.1", 6448)
 
-    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print("CUDA available:", torch.cuda.is_available())
+
+    # DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # print("CUDA available:", torch.cuda.is_available())
+    # if torch.cuda.is_available():
+    #     print("GPU name:", torch.cuda.get_device_name(0))
+    #     print("CUDA version:", torch.version.cuda)
+    # else:
+    #     print("using CPU")
     if torch.cuda.is_available():
-        print("GPU name:", torch.cuda.get_device_name(0))
-        print("CUDA version:", torch.version.cuda)
+        DEVICE = 'cuda'
+        print(" Running on: CUDA (NVIDIA GPU)")
+    elif torch.backends.mps.is_available():
+        DEVICE = 'mps'
+        print(" Running on: MPS (Mac Apple Silicon GPU)")
     else:
-        print("using CPU")
-    
+        DEVICE = 'cpu'
+        print(" Running on: CPU (Slow)")
+
     depth_anything = DepthAnything.from_pretrained('LiheYoung/depth_anything_{}14'.format(encoder)).to(DEVICE).eval()
     
     total_params = sum(param.numel() for param in depth_anything.parameters())
@@ -97,50 +107,46 @@ if __name__ == '__main__':
         
         # raw depth for potential further processing
         raw_depth = depth.cpu().numpy()
-        h_map, w_map = raw_depth.shape
-
-        # 1. 寻找最大最小值和位置
+        
+        # 归一化深度图 (0.0 到 1.0)，方便计算 Occupancy
+        # 注意：Depth Anything 输出值越大代表越近 (Disparity)
         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(raw_depth)
+        norm_depth = (raw_depth - min_val) / (max_val - min_val + 1e-6)
 
-        # 2. 计算平均深度 (Mean Depth) - 环境压迫感
+        # [Feature 1] Mean Depth (平均深度) -> 代表 "物理压强"
+        # 你的身体介入屏幕越深，这个值越大
         mean_depth = float(np.mean(raw_depth))
 
-        # 3. 计算方差 (Variance) - 混乱度/复杂度
+        # [Feature 2] Occupancy Rate (侵占率/体积感) -> 代表 "淹没感"
+        # 计算有多少比例的像素是非常近的 (亮度 > 0.7)
+        # 这是一个 3D 概念：不仅仅是靠近，而是"填满"了空间
+        occupancy_threshold = 0.7 
+        occupancy_rate = float(np.sum(norm_depth > occupancy_threshold) / (h * w))
+
+        # [Feature 3] Variance (方差) -> 代表 "信息复杂度/焦虑"
+        # 画面深度层次越多，方差越大 (例如手伸出来，背景很远)
         variance = float(np.var(raw_depth))
 
-        # 4. 计算深度变化量 (Delta Depth) - 挣扎/动作幅度
-        if 'last_mean_depth' not in locals():
-            last_mean_depth = mean_depth
+        # [Feature 4] Delta Depth (动作幅度/速度) -> 代表 "挣扎"
+        # 计算这一帧和上一帧的平均深度差
         delta_depth = float(abs(mean_depth - last_mean_depth))
-        last_mean_depth = mean_depth
+        last_mean_depth = mean_depth # 更新缓存
 
-        # 5. 计算最近点坐标 (The Point of Contact) - 对抗的焦点
-        # max_loc 是最大值的位置，即“最近”的点
-        focus_x = float(max_loc[0] / w_map) # 归一化 X (0.0 - 1.0)
-        focus_y = float(max_loc[1] / h_map) # 归一化 Y (0.0 - 1.0)
+        # [Feature 5 & 6] Focus Point (最近点坐标) -> 代表 "对抗焦点"
+        # 找到深度最大值的位置 (即离摄像头最近的点，通常是手或头)
+        focus_x = float(max_loc[0] / w) # 归一化 0.0-1.0
+        focus_y = float(max_loc[1] / h) # 归一化 0.0-1.0
 
-        # 6. 计算左右倾斜度 (Horizontal Imbalance) - 左右平衡
-        mid_x = w_map // 2
-        left_part = raw_depth[:, :mid_x]
-        right_part = raw_depth[:, mid_x:]
-        # 如果 > 0，说明左边更近/物体更多；如果 < 0，说明右边更近
-        horizontal_imbalance = float(np.mean(left_part) - np.mean(right_part))
-
-        # 7. 计算侵占率 (Occupancy Rate) - 信息淹没感
-        # 归一化当前帧深度到 0-1
-        norm_depth_frame = (raw_depth - min_val) / (max_val - min_val + 1e-6)
-        # 设定阈值：比如最亮（最近）的 30% 区域被认为是“近距离接触”
-        # 统计有多少像素超过了 0.7 (即 70% brightness)
-        occupancy_rate = float(np.sum(norm_depth_frame > 0.7) / (h_map * w_map))
-
-        depth_features = [
-            mean_depth, 
-            variance, 
-            delta_depth, 
-            occupancy_rate, 
-            horizontal_imbalance, 
-            focus_x, 
-            focus_y
+        # --- 3. 发送 OSC 数据 ---
+        
+        # 顺序必须固定，Wekinator 接收也要按这个顺序
+        features = [
+            mean_depth,      # Input 1
+            occupancy_rate,  # Input 2
+            variance,        # Input 3
+            delta_depth,     # Input 4
+            focus_x,         # Input 5 (直通)
+            focus_y          # Input 6 (直通)
         ]
 
         
