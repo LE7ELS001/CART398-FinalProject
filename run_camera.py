@@ -19,7 +19,7 @@ if __name__ == '__main__':
     
     # encoders = ['vits', 'vitb', 'vitl']
     encoder = 'vits'  # default encoder
-    video_path = 1
+    video_path = 0
 
     margin_width = 50
     caption_height = 60
@@ -85,13 +85,16 @@ if __name__ == '__main__':
     #     print("Sent frame:", i)
     #     time.sleep(0.5)
 
+    last_mean_depth = None
+    
     while cap.isOpened():
         ret, raw_image = cap.read()
 
         if  not ret:
             break
 
-        raw_image = cv2.resize(raw_image, (640,480))
+        # raw_image = cv2.resize(raw_image, (640,480))
+        raw_image = cv2.resize(raw_image, (140,210))
         
         image = cv2.cvtColor(raw_image, cv2.COLOR_BGR2RGB) / 255.0
 
@@ -129,8 +132,13 @@ if __name__ == '__main__':
 
         # [Feature 4] Delta Depth (动作幅度/速度) -> 代表 "挣扎"
         # 计算这一帧和上一帧的平均深度差
-        delta_depth = float(abs(mean_depth - last_mean_depth))
-        last_mean_depth = mean_depth # 更新缓存
+        if last_mean_depth is None:
+    # 第一帧没有上一帧，给个 0 或者一个很小的值
+            delta_depth = 0.0
+        else:
+            delta_depth = float(abs(mean_depth - last_mean_depth))
+
+        last_mean_depth = mean_depth 
 
         # [Feature 5 & 6] Focus Point (最近点坐标) -> 代表 "对抗焦点"
         # 找到深度最大值的位置 (即离摄像头最近的点，通常是手或头)
