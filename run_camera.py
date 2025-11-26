@@ -180,7 +180,7 @@ if __name__ == '__main__':
         # top_depth, bottom_depth, variance, min_depth, max_depth, delta_depth
         # ]
 
-        osc_client.send_message("/depth/features", depth_features)
+        osc_client.send_message("/depth/features", features)
         # print("Sent depth features:", depth_features)
 
         # Normalize depth for visualization
