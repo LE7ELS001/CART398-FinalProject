@@ -97,35 +97,82 @@ if __name__ == '__main__':
         
         # raw depth for potential further processing
         raw_depth = depth.cpu().numpy()
+        h_map, w_map = raw_depth.shape
 
-        # test protocol osc communication 
-        if 'last_mean_depth' not in locals():
-            last_mean_depth = np.mean(raw_depth)
-        
-        h, w = raw_depth.shape
-        center = raw_depth[h//3:2*h//3, w//3:2*w//3]
-        left = raw_depth[:, :w//3]
-        right = raw_depth[:, -w//3:]
-        top = raw_depth[:h//2, :]
-        bottom = raw_depth[h//2:, :]
+        # 1. 寻找最大最小值和位置
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(raw_depth)
 
+        # 2. 计算平均深度 (Mean Depth) - 环境压迫感
         mean_depth = float(np.mean(raw_depth))
-        center_depth = float(np.mean(center))
-        left_depth = float(np.mean(left))
-        right_depth = float(np.mean(right))
-        top_depth = float(np.mean(top))
-        bottom_depth = float(np.mean(bottom))
-        variance = float(np.var(raw_depth))
-        min_depth = float(np.min(raw_depth))
-        max_depth = float(np.max(raw_depth))
-        delta_depth = float(abs(mean_depth - last_mean_depth))
 
+        # 3. 计算方差 (Variance) - 混乱度/复杂度
+        variance = float(np.var(raw_depth))
+
+        # 4. 计算深度变化量 (Delta Depth) - 挣扎/动作幅度
+        if 'last_mean_depth' not in locals():
+            last_mean_depth = mean_depth
+        delta_depth = float(abs(mean_depth - last_mean_depth))
         last_mean_depth = mean_depth
 
+        # 5. 计算最近点坐标 (The Point of Contact) - 对抗的焦点
+        # max_loc 是最大值的位置，即“最近”的点
+        focus_x = float(max_loc[0] / w_map) # 归一化 X (0.0 - 1.0)
+        focus_y = float(max_loc[1] / h_map) # 归一化 Y (0.0 - 1.0)
+
+        # 6. 计算左右倾斜度 (Horizontal Imbalance) - 左右平衡
+        mid_x = w_map // 2
+        left_part = raw_depth[:, :mid_x]
+        right_part = raw_depth[:, mid_x:]
+        # 如果 > 0，说明左边更近/物体更多；如果 < 0，说明右边更近
+        horizontal_imbalance = float(np.mean(left_part) - np.mean(right_part))
+
+        # 7. 计算侵占率 (Occupancy Rate) - 信息淹没感
+        # 归一化当前帧深度到 0-1
+        norm_depth_frame = (raw_depth - min_val) / (max_val - min_val + 1e-6)
+        # 设定阈值：比如最亮（最近）的 30% 区域被认为是“近距离接触”
+        # 统计有多少像素超过了 0.7 (即 70% brightness)
+        occupancy_rate = float(np.sum(norm_depth_frame > 0.7) / (h_map * w_map))
+
         depth_features = [
-        mean_depth, center_depth, left_depth, right_depth,
-        top_depth, bottom_depth, variance, min_depth, max_depth, delta_depth
+            mean_depth, 
+            variance, 
+            delta_depth, 
+            occupancy_rate, 
+            horizontal_imbalance, 
+            focus_x, 
+            focus_y
         ]
+
+        
+
+        # # test protocol osc communication 
+        # if 'last_mean_depth' not in locals():
+        #     last_mean_depth = np.mean(raw_depth)
+        
+        # h, w = raw_depth.shape
+        # center = raw_depth[h//3:2*h//3, w//3:2*w//3]
+        # left = raw_depth[:, :w//3]
+        # right = raw_depth[:, -w//3:]
+        # top = raw_depth[:h//2, :]
+        # bottom = raw_depth[h//2:, :]
+
+        # mean_depth = float(np.mean(raw_depth))
+        # center_depth = float(np.mean(center))
+        # left_depth = float(np.mean(left))
+        # right_depth = float(np.mean(right))
+        # top_depth = float(np.mean(top))
+        # bottom_depth = float(np.mean(bottom))
+        # variance = float(np.var(raw_depth))
+        # min_depth = float(np.min(raw_depth))
+        # max_depth = float(np.max(raw_depth))
+        # delta_depth = float(abs(mean_depth - last_mean_depth))
+
+        # last_mean_depth = mean_depth
+
+        # depth_features = [
+        # mean_depth, center_depth, left_depth, right_depth,
+        # top_depth, bottom_depth, variance, min_depth, max_depth, delta_depth
+        # ]
 
         osc_client.send_message("/depth/features", depth_features)
         # print("Sent depth features:", depth_features)
